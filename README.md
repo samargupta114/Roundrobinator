@@ -2,7 +2,7 @@
 ### ( Application API Mirror Via Round Robin Algorithm ) 
 
 Roundrobinator is a load balancing service that distributes incoming HTTP requests to multiple application instances using the round-robin algorithm. It acts as a proxy, forwarding requests to  application API  `/mirror`, 
-ensuring load is balanced across multiple servers. The application includes health-check mechanisms and supports graceful shutdowns.
+ensuring load is balanced across multiple servers. The application includes health-check mechanisms and supports graceful shutdowns in GO.
 
 # Key Components:
 1. Round Robin Load Balancer: Balances incoming requests between multiple application API servers.
