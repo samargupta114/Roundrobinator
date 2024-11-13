@@ -1,0 +1,20 @@
+{
+  "server": {
+    "port": "8080",
+    "timeout": 10
+  },
+  "backend": {
+    "routes": [
+      "8081",
+      "8082",
+      "8083"
+    ],
+    "endpoints": {
+      "healthcheck": {
+        "url": "/health"
+      }
+    }
+  },
+  "healthCheck_ticker_time_seconds" : 45,
+  "graceful_timeout_seconds": 10
+}
