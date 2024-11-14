@@ -6,6 +6,11 @@ import (
 	"sync"
 )
 
+// RoundRobinInterface defines the methods for RoundRobin
+type RoundRobinInterface interface {
+	Next() (string, error)
+}
+
 // RoundRobin struct holds the list of instances and the current index for round-robin distribution.
 type RoundRobin struct {
 	instances []string   // List of instances/ports to balance the load across

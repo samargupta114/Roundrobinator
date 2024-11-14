@@ -7,70 +7,89 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samargupta114/Roundrobinator.git/internal/app"
-	"github.com/samargupta114/Roundrobinator.git/internal/config"
 	"github.com/samargupta114/Roundrobinator.git/internal/health"
+
+	"github.com/samargupta114/Roundrobinator.git/internal/config"
+	"github.com/samargupta114/Roundrobinator.git/internal/handler"
 )
+
+// ServerInterface defines the methods we care about for mocking
+type ServerInterface interface {
+	ListenAndServe() error
+	Shutdown(ctx context.Context) error
+}
+
+// ServerWrapper is a wrapper around http.Server
+type ServerWrapper struct {
+	*http.Server
+}
 
 // ApplicationServer implements the ServerLauncher interface for Application APIs.
 type ApplicationServer struct{}
 
 // Launch starts multiple Application API instances.
 func (as *ApplicationServer) Launch(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) error {
-	// Launch the application servers on different ports as configured
+	// Loop through each route in the configuration and launch a server on each port.
 	for _, port := range cfg.Backend.Routes {
-		wg.Add(1)
-		go func(port string) {
-			defer wg.Done()
-			// Start a single application server
-			if err := startAppServer(ctx, port, cfg); err != nil {
-				//push alerts
-				log.Printf("Error starting Application API on port %s: %v", port, err)
-			}
-		}(port)
+		wg.Add(1)                                // Add to the WaitGroup for each server to be launched concurrently.
+		go as.startAppServer(ctx, port, cfg, wg) // Start the server in a separate goroutine.
 	}
 	return nil
 }
 
 // startAppServer launches a single instance of the Application API.
-func startAppServer(ctx context.Context, port string, cfg *config.Config) error {
+func (as *ApplicationServer) startAppServer(ctx context.Context, port string, cfg *config.Config, wg *sync.WaitGroup) {
+	defer wg.Done() // Decrement the WaitGroup counter when this function completes.
+
+	// Create a new ServeMux to handle HTTP routes
 	mux := http.NewServeMux()
-	// Register /health route for health check
+	// Register the `/health` route to monitor the health of the server
 	mux.HandleFunc(cfg.Backend.Endpoint[Healthcheck].URL, health.HealthCheckHandler)
-	// Register the /mirror route
-	mux.HandleFunc("/mirror", app.ApplicationAPIHandler)
+	// Register the `/mirror` route to handle the main API functionality
+	mux.HandleFunc("/mirror", handler.ApplicationAPIHandler)
 
-	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
+	// Create a new HTTP server instance with the specified port and handler
+	server := &ServerWrapper{Server: &http.Server{Addr: ":" + port, Handler: mux}}
 
-	// Start the server in a separate goroutine so that it can be gracefully shut down
+	// Start the HTTP server and handle graceful shutdown
+	go as.runServer(ctx, server, port, cfg)
+}
+
+func (as *ApplicationServer) runServer(ctx context.Context, server *ServerWrapper, port string, cfg *config.Config) {
+	// Log to indicate the server is starting
+	log.Printf("Starting Application API server on http://localhost:%s/mirror", port)
+
+	// Create a channel to report any errors encountered by the server
+	errCh := make(chan error)
+
+	// Start the server in a new goroutine
 	go func() {
-		log.Printf("Starting Application API server on http://localhost:%s/mirror", port)
+		// Listen and serve the application API, report errors through the error channel
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			//push alerts
-			log.Printf("Application API server failed on port %s: %v", port, err)
+			errCh <- err // Send the error to the error channel
 		}
 	}()
 
-	// Gracefully shutdown the server when the context is canceled
+	// Start another goroutine to listen for the shutdown signal (context cancellation)
 	go func() {
-		<-ctx.Done() // Wait for cancellation signal
-		log.Printf("Shutting down Application API on port %s...", port)
+		<-ctx.Done() // Wait for the cancellation signal
+		// Once canceled, start the graceful shutdown with a timeout
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.GracefulTimeoutSeconds)*time.Second)
 		defer cancel()
 
-		// Attempt graceful shutdown
+		// Attempt to shut down the server gracefully, and report errors if any
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			//push alerts
-			log.Printf("Graceful shutdown failed on port %s: %v", port, err)
-		} else {
-			log.Printf("Successfully shut down Application API on port %s", port)
+			errCh <- err // Send the error to the error channel
 		}
+		close(errCh) // Close the error channel after attempting shutdown
 	}()
 
-	// Block here until the server shuts down (returns)
-	<-ctx.Done()
-	return nil
+	// Block until an error occurs (server failure) or the shutdown completes
+	if err := <-errCh; err != nil {
+		// Log failure if the server encountered an error
+		log.Printf("Application API server failed on port %s: %v", port, err)
+	} else {
+		// Log successful shutdown
+		log.Printf("Successfully shut down Application API on port %s", port)
+	}
 }

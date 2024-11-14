@@ -30,7 +30,7 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//for debugging
+	// For debugging
 	log.Println("Health check response : " + response.Status)
 }
 
@@ -38,15 +38,17 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 func StartHealthCheck(cfg *config.Config, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	log.Printf("Starting health check for backend servers")
+
 	// Set up a ticker to run health checks periodically
 	ticker := time.NewTicker(time.Duration(cfg.HealthCheckTickerTimeInSeconds) * time.Second)
 	defer ticker.Stop()
 
-	// Run health checks indefinitely in a loop
+	// Run health checks until the context is canceled
 	for {
 		select {
 		case <-ticker.C:
-			// Perform health checks for the configured services
+			// Perform health checks for the configured services using the injected function
 			checkHealth(cfg)
 		}
 	}
@@ -67,12 +69,15 @@ func checkHealth(cfg *config.Config) {
 	// Iterate through all health check URLs and log the results
 	for _, url := range healthURLs {
 		resp, err := http.Get(url)
-		if err != nil && resp.StatusCode != http.StatusOK {
+		if err != nil || resp.StatusCode != http.StatusOK {
 			//push alerts
 			log.Printf("Health check failed for %s: %v\n", url, err)
 		} else {
 			log.Printf("Health check succeeded for %s: %d\n", url, resp.StatusCode)
-			resp.Body.Close() // Close the response body to avoid resource leakage
+			err := resp.Body.Close() // Close the response body to avoid resource leakage
+			if err != nil {
+				log.Printf("Cannot Close response Body , Error:  %v\n", err)
+			}
 		}
 	}
 }
