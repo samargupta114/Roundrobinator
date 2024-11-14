@@ -10,7 +10,7 @@ const (
 	confPath = "ROUND_ROBIN_CONF_PATH" // Environment variable that specifies the config file path
 )
 
-// Config holds the overall configuration for the application, including server settings, backend configurations, and health check intervals.
+// Config holds the overall configuration for the application, including server settings, backend configurations, and health check , graceful shutdown intervals.
 type Config struct {
 	Server  Server  `json:"server"`  // Server configuration settings
 	Backend Backend `json:"backend"` // Backend configuration for API routing and endpoints
@@ -54,14 +54,14 @@ func LoadConfig() (*Config, error) {
 	// Get the config file path from environment variable
 	configPath := os.Getenv(confPath)
 	if configPath == "" {
-		//push alerts
-		return nil, fmt.Errorf("Config path not set in environment variable : %s", confPath)
+		// push alerts
+		return nil, fmt.Errorf("config path not set in environment variable : %s", confPath)
 	}
 
 	// Open the config file
 	file, err := os.Open(configPath)
 	if err != nil {
-		//push alerts
+		// push alerts
 		return nil, fmt.Errorf("failed to load config: %v", err)
 	}
 	defer file.Close()
@@ -69,7 +69,7 @@ func LoadConfig() (*Config, error) {
 	// Unmarshal JSON content into Config struct
 	var cfg Config
 	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
-		//push alerts
+		// push alerts
 		return nil, fmt.Errorf("failed to decode config: %v", err)
 	}
 

@@ -1,94 +1,138 @@
 package handler
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/samargupta114/Roundrobinator.git/internal/roundrobin"
-	"github.com/stretchr/testify/assert"
 )
 
-// MockHttpClient is a mock implementation of the httpclient.ClientInterface to mock the ForwardRequest method.
+// MockRoundRobin is a mock implementation of RoundRobin for testing.
+type MockRoundRobin struct {
+	ports   []string
+	counter int
+	err     error
+}
+
+func (m *MockRoundRobin) Next() (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	port := m.ports[m.counter%len(m.ports)]
+	m.counter++
+	return port, nil
+}
+
+// MockHttpClient is a mock implementation of ClientInterface for testing.
 type MockHttpClient struct {
-	ForwardRequestFunc func(*http.Request, string) (*http.Response, error)
+	resp *http.Response
+	err  error
 }
 
-// ForwardRequest is the mocked method for forwarding requests.
 func (m *MockHttpClient) ForwardRequest(r *http.Request, url string) (*http.Response, error) {
-	return m.ForwardRequestFunc(r, url)
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.resp, nil
 }
 
+// TestRouteHandler tests the RouteHandler function using a table-driven approach.
 func TestRouteHandler(t *testing.T) {
 	tests := []struct {
-		name           string
-		roundRobin     *roundrobin.RoundRobin
-		mockClientFunc func(*http.Request, string) (*http.Response, error)
-		expectedStatus int
-		expectedBody   string
+		name               string
+		roundRobinError    error
+		forwardRequestResp *http.Response
+		forwardRequestErr  error
+		expectedStatusCode int
+		expectedBody       string
 	}{
 		{
-			name:       "Successful request forwarding",
-			roundRobin: roundrobin.New([]string{"8081", "8082"}),
-			mockClientFunc: func(r *http.Request, url string) (*http.Response, error) {
-				// Simulating a successful response from the backend
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader([]byte(`{"message": "success"}`))),
-				}, nil
-			},
-			expectedStatus: http.StatusOK,
-			expectedBody:   `{"message": "success"}`,
+			name:               "Round Robin Next Error",
+			roundRobinError:    errors.New("round robin error"),
+			forwardRequestResp: nil,
+			forwardRequestErr:  nil,
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Error getting next round-robin instance\n",
 		},
 		{
-			name:       "Error forwarding request",
-			roundRobin: roundrobin.New([]string{"8081", "8082"}),
-			mockClientFunc: func(r *http.Request, url string) (*http.Response, error) {
-				// Simulating an error while forwarding the request
-				return nil, errors.New("forwarding error")
-			},
-			expectedStatus: http.StatusBadGateway,
-			expectedBody:   "Error forwarding request",
+			name:               "Forwarding Request Error",
+			roundRobinError:    nil,
+			forwardRequestResp: nil,
+			forwardRequestErr:  errors.New("forwarding request error"),
+			expectedStatusCode: http.StatusBadGateway,
+			expectedBody:       "Error forwarding request\n",
 		},
 		{
-			name:       "Error writing response",
-			roundRobin: roundrobin.New([]string{"8081", "8082"}),
-			mockClientFunc: func(r *http.Request, url string) (*http.Response, error) {
-				// Simulating a successful response but error while writing to the response
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader([]byte(`{"message": "success"}`))),
-				}, nil
+			name:            "Successful Forwarding",
+			roundRobinError: nil,
+			forwardRequestResp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"message": "Success"}`)),
 			},
-			expectedStatus: http.StatusOK,
-			expectedBody:   `{"message": "success"}`,
+			forwardRequestErr:  nil,
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"message": "Success"}`,
+		},
+		{
+			name:            "Error in Streaming Response Body",
+			roundRobinError: nil,
+			forwardRequestResp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(&errorReader{}), // Simulate error during body read
+			},
+			forwardRequestErr:  nil,
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Error streaming response body\n",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock HTTP client that implements ClientInterface
-			mockClient := &MockHttpClient{
-				ForwardRequestFunc: tt.mockClientFunc,
+			// Set up mocks
+			mockRoundRobin := &MockRoundRobin{
+				ports:   []string{"8081"},
+				counter: 0,
+				err:     tt.roundRobinError,
+			}
+			mockHttpClient := &MockHttpClient{
+				resp: tt.forwardRequestResp,
+				err:  tt.forwardRequestErr,
 			}
 
 			// Create a test request
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
-
-			// Create a response recorder to capture the response
 			rr := httptest.NewRecorder()
 
-			// Call the RouteHandler
-			handler := RouteHandler(tt.roundRobin, mockClient)
+			// Create the handler function
+			handler := RouteHandler(mockRoundRobin, mockHttpClient)
+
+			// Call the handler
 			handler.ServeHTTP(rr, req)
 
-			// Assert the status code and response body (trim spaces and newlines)
-			assert.Equal(t, tt.expectedStatus, rr.Code)
-			assert.Equal(t, tt.expectedBody, strings.TrimSpace(rr.Body.String()))
+			// Check status code
+			if rr.Code != tt.expectedStatusCode {
+				t.Errorf("Expected status code %d, got %d", tt.expectedStatusCode, rr.Code)
+			}
+
+			// Check response body
+			if body := rr.Body.String(); body != tt.expectedBody {
+				t.Errorf("Expected response body %q, got %q", tt.expectedBody, body)
+			}
 		})
 	}
+}
+
+// errorReader is a mock reader that simulates an error during Read.
+type errorReader struct{}
+
+func (e *errorReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("error reading body")
+}
+
+func (e *errorReader) Close() error {
+	return nil
 }
